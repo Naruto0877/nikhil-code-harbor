@@ -1,0 +1,43 @@
+{
+  "name": "nikhil-code-harbor",
+  "version": "0.2.0",
+  "description": "High-performance local AI coding gateway and developer workbench with native Anthropic Messages, OpenAI Chat, and Codex support, automated multi-provider fallback, and browser monitoring.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Nikhil Varma (https://github.com/Naruto0877)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Naruto0877/nikhil-code-harbor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Naruto0877/nikhil-code-harbor/issues"
+  },
+  "homepage": "https://github.com/Naruto0877/nikhil-code-harbor#readme",
+  "keywords": [
+    "ai",
+    "claude",
+    "claude-code",
+    "anthropic",
+    "llm-gateway",
+    "fallback-router",
+    "developer-tools",
+    "developer-infrastructure",
+    "open-source",
+    "openai",
+    "openrouter",
+    "coding-assistant"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "nikhil-code-harbor": "bin/harbor.mjs"
+  },
+  "scripts": {
+    "start": "node bin/harbor.mjs serve",
+    "init": "node bin/harbor.mjs init",
+    "doctor": "node bin/harbor.mjs doctor",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check bin/harbor.mjs && node --check src/config.mjs && node --check src/catalog.mjs && node --check src/gateway.mjs && node --check src/state.mjs && node --check src/compact.mjs && node --check src/links.mjs && node --check web/app.js"
+  }
+}

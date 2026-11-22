@@ -1,0 +1,47 @@
+{
+  "host": "127.0.0.1",
+  "port": 20130,
+  "requestTimeoutMs": 180000,
+  "catalogTtlMs": 300000,
+  "maxBodyBytes": 2097152,
+  "toolOutputLimitChars": 0,
+  "allowDeclaredFreeTiers": false,
+  "providers": [
+    {
+      "id": "openrouter",
+      "kind": "openrouter",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "protocols": ["chat", "responses", "messages"],
+      "enabled": true
+    },
+    {
+      "id": "groq",
+      "kind": "declared-free-tier",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "apiKeyEnv": "GROQ_API_KEY",
+      "protocols": ["chat"],
+      "enabled": false,
+      "freeTier": null
+    },
+    {
+      "id": "nvidia",
+      "kind": "declared-free-tier",
+      "baseUrl": "https://integrate.api.nvidia.com/v1",
+      "apiKeyEnv": "NVIDIA_API_KEY",
+      "protocols": ["chat"],
+      "enabled": false,
+      "freeTier": null
+    },
+    {
+      "id": "local",
+      "kind": "local",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "protocols": ["chat"],
+      "enabled": false
+    }
+  ],
+  "routes": {
+    "harbor-auto": [{ "provider": "openrouter", "model": "openrouter/free" }]
+  }
+}

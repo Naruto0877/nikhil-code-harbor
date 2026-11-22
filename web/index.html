@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nikhil Code Harbor</title><link rel="stylesheet" href="/app.css"><script src="/app.js" defer></script></head>
+<body><header><b>Nikhil Code Harbor</b><span id="connection">Disconnected</span></header>
+<main><aside><h2>Connection</h2><form id="login"><label for="token">Local gateway token</label><input id="token" type="password" required autocomplete="off"><button>Connect</button></form>
+<section id="providers" hidden><h2>Provider activity</h2><ul id="activity"></ul><button type="button" id="refresh">Refresh activity</button></section></aside>
+<article><div class="bar"><h1>Prompt workspace</h1><button type="button" id="reset" disabled>New conversation</button></div>
+<label for="route">Chat route</label><select id="route" disabled></select><p id="path"></p>
+<div id="history" role="log" aria-live="polite"></div>
+<form id="composer"><label for="prompt">Message</label><textarea id="prompt" rows="4" required placeholder="Ask about code or paste a snippet"></textarea><button id="send" disabled>Send message</button></form>
+<p id="notice" role="status"></p></article></main></body></html>
