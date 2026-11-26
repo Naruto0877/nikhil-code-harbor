@@ -7,22 +7,28 @@ numeric-loopback HTTP listener
     |
 Host/Origin checks -> gateway authentication -> request/concurrency limits
     |
-explicit alias + protocol -> supported-parameter validation
+request ID + request log entry (no content)
     |
-optional tool-result compaction
+explicit alias + protocol -> supported-parameter and tool-result shape validation
     |
-candidate eligibility -> current pricing or explicit local/account policy
+continuation owner lookup (Responses previous_response_id)
+    |
+optional deterministic tool-result compaction
+    |
+candidate eligibility: protocol, credential, capabilities, cooldown
+    -> current pricing or explicit local/account policy
     |
 native upstream request (provider credential added here only)
     |                         |
-pre-response 429/5xx/error    successful JSON / event stream
-    |                         |
-bounded cooldown + next      byte-preserving forwarding; no stream replay
+before first byte:             first byte received:
+429/529/5xx/timeout ->        byte-preserving forwarding; idle timer;
+classified cooldown + next    completion-signal observation; no replay
+billing / no-retry -> stop
     |                         |
     +---------- aggregate usage counters ----------+
 ```
 
-`src/config.mjs` validates endpoint, capability, and route configuration. `src/catalog.mjs` obtains and expires public model pricing evidence. `src/gateway.mjs` owns client authentication, routing, upstream deadlines, response forwarding, and cooldowns. `src/state.mjs` owns the private local token, aggregate usage persistence, and streaming usage observation. `src/compact.mjs` is the explicit lossy tool-result reducer. `bin/harbor.mjs` contains initialization, serving, discovery, diagnosis, and status commands.
+`src/config.mjs` validates endpoint, capability, and route configuration. `src/routing.mjs` derives a request's required capabilities, validates and forwards Anthropic protocol headers, and explains skipped candidates. `src/diagnostics.mjs` classifies failures and keeps the bounded request log. `src/observe.mjs` reads usage and completion events alongside forwarding. `src/handoff.mjs` implements the opt-in Claude Code crash handoff. `src/catalog.mjs` obtains and expires public model pricing evidence. `src/gateway.mjs` owns client authentication, routing, upstream deadlines, response forwarding, and cooldowns. `src/state.mjs` owns the private local token, aggregate usage persistence, and streaming usage observation. `src/compact.mjs` is the explicit lossy tool-result reducer. `bin/harbor.mjs` contains initialization, serving, discovery, diagnosis, and status commands.
 
 The server forwards native wire formats. An adapter's protocol declaration controls eligibility; OpenRouter provides the native Chat, Responses, and Messages interfaces. This avoids inventing a partial mapping for tool calls or reasoning events. Other compatible endpoints may be configured for protocols they actually support.
 

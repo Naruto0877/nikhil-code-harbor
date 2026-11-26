@@ -12,6 +12,6 @@ textarea { resize:vertical; } button { border:1px solid #b9c8bf; border-radius:6
 form button { background:#18543e; color:white; margin-top:.55rem; } button:disabled { opacity:.5; cursor:default; }
 section,#history:not(:empty) { margin-top:1.5rem; border-top:1px solid #d7dfd7; padding-top:1rem; }
 #path,#notice,small { color:#3e6052; font-size:.88rem; overflow-wrap:anywhere; }
-#activity { padding:0; list-style:none; } #activity li { margin-bottom:.65rem; }
+#activity,#recent { padding:0; list-style:none; } #activity li,#recent li { margin-bottom:.65rem; }
 #history p { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.55; } #history b { font-size:.85rem; }
 @media(max-width:760px) { main { grid-template-columns:1fr; margin:1rem auto; gap:1rem; } }

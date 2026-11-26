@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { boundedText } from "./catalog.mjs";
-import { safeModelId, validateConfig } from "./config.mjs";
+import { CAPABILITIES, isLoopback, safeModelId, validateConfig } from "./config.mjs";
 
 const presets = new Map([
   ["catalog-router", { port: 20128, key: "HARBOR_CATALOG_KEY" }],
@@ -54,10 +54,14 @@ export function checkEndpoint(config, provider) {
   }
 }
 
-export async function addLink(path, provider, model, alias, protocols) {
+function checkAlias(model, alias) {
   if (!safeModelId(model) || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$/.test(alias) || ["constructor", "prototype", "__proto__"].includes(alias)) {
     throw new SetupError("Choose a valid model and route alias.");
   }
+}
+
+// Validated, locked, atomic edit of config.json.
+async function editConfig(path, mutate) {
   const lock = path + ".lock";
   const temporary = path + "." + randomUUID() + ".tmp";
   let handle;
@@ -65,6 +69,26 @@ export async function addLink(path, provider, model, alias, protocols) {
     handle = await open(lock, "wx", 0o600);
     const config = JSON.parse(await readFile(path, "utf8"));
     validateConfig(config);
+    mutate(config);
+    validateConfig(config);
+    await writeFile(temporary, JSON.stringify(config, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+    await rename(temporary, path);
+  } catch (error) {
+    if (!handle && error.code === "EEXIST") throw new SetupError("A configuration edit is in progress. Retry after it finishes.");
+    if (error.message?.startsWith("Invalid configuration:")) throw new SetupError(error.message);
+    throw error;
+  } finally {
+    if (handle) {
+      await handle.close();
+      await unlink(temporary).catch(error => { if (error.code !== "ENOENT") throw error; });
+      await unlink(lock);
+    }
+  }
+}
+
+export async function addLink(path, provider, model, alias, protocols) {
+  checkAlias(model, alias);
+  await editConfig(path, config => {
     checkEndpoint(config, provider);
     const previous = config.providers.find(p => p.id === provider.id);
     if (previous?.enabled === false) throw new SetupError("Enable this gateway in config.json before linking it.");
@@ -76,17 +100,47 @@ export async function addLink(path, provider, model, alias, protocols) {
     }
     if (!route.some(c => c.provider === provider.id && c.model === model)) route.push({ provider: provider.id, model });
     config.routes[alias] = route;
-    validateConfig(config);
-    await writeFile(temporary, JSON.stringify(config, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-    await rename(temporary, path);
+  });
+}
+
+// Lists model IDs from a developer-run local server (no credential is sent).
+export async function localModels(baseUrl, request = fetch) {
+  let response;
+  try {
+    response = await request(baseUrl + "/models", { headers: { accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(10000) });
+    if (!response.ok) throw new SetupError(`The local server returned HTTP ${response.status} on /models.`);
+    const body = JSON.parse(await boundedText(response, 4 * 1024 * 1024));
+    const list = Array.isArray(body.data) ? body.data : Array.isArray(body.models) ? body.models : null;
+    if (!list) throw new SetupError("The local server returned an invalid model list.");
+    return [...new Set(list.map(m => m?.id ?? m?.name ?? m?.model).filter(safeModelId))].sort();
   } catch (error) {
-    if (!handle && error.code === "EEXIST") throw new SetupError("A configuration edit is in progress. Retry after it finishes.");
-    throw error;
+    if (error instanceof SetupError) throw error;
+    throw new SetupError(`Could not read models at ${baseUrl}/models. Start the local server first.`);
   } finally {
-    if (handle) {
-      await handle.close();
-      await unlink(temporary).catch(error => { if (error.code !== "ENOENT") throw error; });
-      await unlink(lock);
-    }
+    if (response?.body && !response.bodyUsed) await response.body.cancel();
   }
+}
+
+// Enables the built-in `local` provider at a developer-chosen loopback endpoint
+// and appends it to a route. Billing: local compute only; no hosted provider is added.
+export async function configureLocal(path, { baseUrl, model, alias, protocols, capabilities }) {
+  checkAlias(model, alias);
+  let url;
+  try { url = new URL(baseUrl); } catch { throw new SetupError("Choose a base URL such as http://127.0.0.1:11434/v1."); }
+  if (url.protocol !== "http:" || !isLoopback(url.hostname)) throw new SetupError("The local endpoint must be http:// on 127.0.0.1 or [::1].");
+  if (!protocols?.length || protocols.some(p => !["chat", "messages", "responses"].includes(p))) throw new SetupError("Choose --protocols from chat, messages, responses.");
+  if (capabilities?.some(c => !CAPABILITIES.includes(c))) throw new SetupError(`Choose --capabilities from ${CAPABILITIES.join(", ")}.`);
+  await editConfig(path, config => {
+    let local = config.providers.find(p => p.id === "local");
+    if (local && local.kind !== "local") throw new SetupError("Provider ID local is used by another kind. Review config.json.");
+    if (!local) { local = { id: "local", kind: "local" }; config.providers.push(local); }
+    const normalized = url.href.replace(/\/$/, "");
+    if (Number(url.port || 80) === config.port) throw new SetupError("Choose the local server's port, different from the Harbor port.");
+    Object.assign(local, { baseUrl: normalized, protocols, enabled: true });
+    if (capabilities) local.capabilities = capabilities;
+    const route = Object.hasOwn(config.routes, alias) ? config.routes[alias] : [];
+    if (route.some(c => config.providers.find(p => p.id === c.provider)?.kind === "linked-gateway")) throw new SetupError("That alias holds linked gateways with upstream-managed billing. Choose another --route.");
+    if (!route.some(c => c.provider === "local" && c.model === model)) route.push({ provider: "local", model });
+    config.routes[alias] = route;
+  });
 }

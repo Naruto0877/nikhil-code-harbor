@@ -3,7 +3,7 @@
 <title>Nikhil Code Harbor</title><link rel="stylesheet" href="/app.css"><script src="/app.js" defer></script></head>
 <body><header><b>Nikhil Code Harbor</b><span id="connection">Disconnected</span></header>
 <main><aside><h2>Connection</h2><form id="login"><label for="token">Local gateway token</label><input id="token" type="password" required autocomplete="off"><button>Connect</button></form>
-<section id="providers" hidden><h2>Provider activity</h2><ul id="activity"></ul><button type="button" id="refresh">Refresh activity</button></section></aside>
+<section id="providers" hidden><h2>Provider activity</h2><ul id="activity"></ul><h2>Last request</h2><p id="lastRequest"></p><h2>Recent requests</h2><ul id="recent"></ul><button type="button" id="refresh">Refresh activity</button></section></aside>
 <article><div class="bar"><h1>Prompt workspace</h1><button type="button" id="reset" disabled>New conversation</button></div>
 <label for="route">Chat route</label><select id="route" disabled></select><p id="path"></p>
 <div id="history" role="log" aria-live="polite"></div>

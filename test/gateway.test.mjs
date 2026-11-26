@@ -185,7 +185,7 @@ test("native Responses and Messages preserve tools and use upstream protocol end
 for (const [protocol, endpoint, body, events] of [
   ["chat", "/v1/chat/completions", basicRequest, 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"path\\":\\"café\\"}"}}]}}]}\n\ndata: {"usage":{"prompt_tokens":4,"completion_tokens":5}}\n\ndata: [DONE]\n\n'],
   ["responses", "/v1/responses", { model: "harbor-auto", input: "task" }, 'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"café"}\n\nevent: response.completed\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":4,"output_tokens":5}}}\n\n'],
-  ["messages", "/v1/messages", { ...basicRequest, max_tokens: 50 }, 'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":4,"output_tokens":0}}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"café"}}\n\nevent: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":5}}\n\n'],
+  ["messages", "/v1/messages", { ...basicRequest, max_tokens: 50 }, 'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":4,"output_tokens":0}}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"café"}}\n\nevent: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":5}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n'],
 ]) test(`${protocol} streaming preserves exact bytes, tool deltas, and usage across chunk boundaries`, async t => {
   const bytes = Buffer.from(events);
   const f = await fixture(t, () => new Response(new ReadableStream({ start(controller) {
@@ -231,11 +231,12 @@ test("provider timeouts abort the request before falling back", async t => {
   assert.equal(f.calls.length, 2);
 });
 
-test("stateful Responses requests do not fall back across providers", async t => {
+test("a continuation whose owner Harbor did not record fails explicitly without upstream calls", async t => {
   const f = await fixture(t, () => new Response("rate-limited", { status: 429 }));
   const response = await f.request("/v1/responses", { model: "harbor-auto", previous_response_id: "existing-id", input: "continue" });
-  assert.equal(response.status, 503);
-  assert.equal(f.calls.length, 1);
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error.type, "continuation_owner_unknown");
+  assert.equal(f.calls.length, 0);
 });
 
 test("large bodies are rejected before inference", async t => {

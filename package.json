@@ -1,6 +1,6 @@
 {
   "name": "nikhil-code-harbor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "High-performance local AI coding gateway and developer workbench with native Anthropic Messages, OpenAI Chat, and Codex support, automated multi-provider fallback, and browser monitoring.",
   "type": "module",
   "license": "MIT",
@@ -38,6 +38,6 @@
     "init": "node bin/harbor.mjs init",
     "doctor": "node bin/harbor.mjs doctor",
     "test": "node --test test/*.test.mjs",
-    "check": "node --check bin/harbor.mjs && node --check src/config.mjs && node --check src/catalog.mjs && node --check src/gateway.mjs && node --check src/state.mjs && node --check src/compact.mjs && node --check src/links.mjs && node --check web/app.js"
+    "check": "node --check bin/harbor.mjs && node --check src/config.mjs && node --check src/catalog.mjs && node --check src/gateway.mjs && node --check src/state.mjs && node --check src/compact.mjs && node --check src/links.mjs && node --check src/routing.mjs && node --check src/observe.mjs && node --check src/diagnostics.mjs && node --check src/handoff.mjs && node --check web/app.js"
   }
 }

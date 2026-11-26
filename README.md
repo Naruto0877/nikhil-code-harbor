@@ -8,10 +8,10 @@
 [![Protocols](https://img.shields.io/badge/Protocols-Anthropic%20%7C%20OpenAI%20%7C%20Codex-orange.svg)](docs/CLIENTS.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-**A high-performance, local-first AI coding gateway and developer workbench designed for agentic workflows.**  
-*Native Anthropic Messages & OpenAI protocol routing, byte-preserving SSE streaming, multi-gateway fallback, and live browser monitoring.*
+**A local-first AI coding gateway and developer workbench for agentic workflows.**  
+*Native Anthropic Messages and OpenAI protocol routing, byte-preserving SSE streaming, classified fallback, and live browser monitoring.*
 
-[Quick Start](#quick-start) • [Claude Code Integration](#claude-code--terminal-workflows) • [Architecture](docs/ARCHITECTURE.md) • [Client Integrations](docs/CLIENTS.md) • [Contributing](CONTRIBUTING.md)
+[Quick Start](#quick-start-from-init-to-a-first-claude-code-request) • [Diagnostics](#diagnosing-a-stopped-request) • [Handoff](docs/HANDOFF.md) • [Architecture](docs/ARCHITECTURE.md) • [Client Integrations](docs/CLIENTS.md) • [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -19,152 +19,144 @@
 
 ## Overview
 
-Modern agentic coding assistants—such as **Claude Code**, VS Code Copilot, Cursor, and Continue.dev—frequently hit provider rate limits (HTTP 429), regional outages, or context window bottlenecks during intensive multi-file refactoring and testing sessions.
+Agentic coding tools such as **Claude Code**, VS Code extensions, Cursor and Continue.dev can stall on rate limits, overloaded providers, or oversized tool output. **Nikhil Code Harbor** is a local, loopback-only gateway that routes those clients to providers *you* configure, falls back between them before any output is sent, and tells you exactly why a request stopped.
 
-**Nikhil Code Harbor** solves this by acting as a lightweight, zero-latency local proxy and resilience layer:
-1. **Unified Routing:** Map alias routes (e.g. `coding`) across multiple upstream providers or local model runtimes.
-2. **Resilient Failover:** When an upstream provider returns a 429 rate limit or 5xx server error, Harbor automatically fails over to the next configured candidate before output starts.
-3. **Exact Wire Protocol Preservation:** Natively implements the **Anthropic Messages API**, **OpenAI Chat Completions**, and **Codex Responses**—faithfully forwarding Server-Sent Events (SSE), tool-call deltas, and reasoning chunks without lossy transformations.
-4. **Agentic Tool Compaction:** Optional bounded reduction for massive tool outputs (such as huge test logs or git diffs) to protect model context windows while preserving prompt integrity.
-5. **Zero External Dependencies:** Implemented in pure, modern Node.js using standard library primitives (`node:http`, `node:crypto`, `node:events`).
+1. **Route aliases:** clients ask for `coding`; Harbor tries that route's candidates in order, skipping any that cannot serve the request's protocol or features.
+2. **Classified failures:** every request gets an ID. Harbor's own concurrency limit, an upstream 429, an upstream 529, a billing/spend-cap stop, and "every provider is cooling down" are reported separately, with the provider and the earliest known retry time.
+3. **Native wire formats:** Anthropic Messages, OpenAI Chat Completions and Responses are forwarded natively. Streams are forwarded byte-for-byte and a partly delivered response is never replayed to another provider.
+4. **Cache-aware usage:** ordinary input, cache-read, cache-write and output tokens are counted per provider, with unknown values kept unknown.
+5. **Optional evidence-preserving compaction** of huge test logs and diffs.
+6. **Optional crash handoff** (`harbor handoff`) that records what changed and which checks finished during a Claude Code session.
+
+Zero npm dependencies; Node.js 22+.
 
 ---
 
 ## System Architecture
 
 ```text
-       [ Claude Code CLI ]     [ VS Code / Continue ]     [ Shell Pipelines ]
-                │                       │                         │
-                └───────────────────────┼─────────────────────────┘
-                                        │
-                                        ▼
-                      ┌───────────────────────────────────┐
-                      │    Nikhil Code Harbor Gateway     │
-                      │    (Loopback: 127.0.0.1:20130)    │
-                      └─────────────────┬─────────────────┘
-                                        │
-         ┌──────────────────────────────┼──────────────────────────────┐
-         ▼                              ▼                              ▼
-┌──────────────────┐           ┌──────────────────┐           ┌──────────────────┐
-│ Anthropic API    │           │ OpenRouter /     │           │ Local Engines    │
-│ (Claude Sonnet/  │◄─Fallback─┤ Declared Tiers   │◄─Fallback─┤ (Ollama, vLLM,   │
-│  Opus / Haiku)   │           │ (Zero-Price IDs) │           │  Local Proxies)  │
-└──────────────────┘           └──────────────────┘           └──────────────────┘
+   [ Claude Code ]   [ VS Code / Continue ]   [ harbor ask ]
+          └──────────────────┼──────────────────┘
+                             ▼
+             ┌───────────────────────────────┐
+             │  Nikhil Code Harbor (loopback) │  auth · request IDs · limits
+             │  route alias -> candidates     │  protocol/capability filter
+             └───────────────┬───────────────┘
+        ┌────────────────────┼─────────────────────┐
+        ▼                    ▼                     ▼
+ ┌──────────────┐   ┌──────────────────┐   ┌───────────────────┐
+ │ Local server │   │ OpenRouter free  │   │ Linked local      │
+ │ (your model) │   │ (verified $0) /  │   │ gateways (billing │
+ │              │   │ declared tiers   │   │ is theirs)        │
+ └──────────────┘   └──────────────────┘   └───────────────────┘
 ```
 
----
-
-## Features
-
-- **Native Anthropic Messages Endpoint (`/v1/messages`):** Seamless drop-in gateway for Claude-based coding tools, preserving reasoning tokens, tool declarations, and live streaming.
-- **Automated Fallback & Cooldown Engine:** Smart exponential backoff and provider cooldowns preventing repeated hammering of rate-limited endpoints.
-- **Interactive Browser Console:** Built-in web UI served directly at `http://127.0.0.1:20130/` to test prompts, inspect active routes, view latency, and monitor fallback events.
-- **Privacy & Security First:** Binds strictly to numeric loopback (`127.0.0.1`), enforces local token authentication, keeps credentials out of logs and git, and stores only local aggregate counters.
-- **Lossless SSE Streaming:** Preserves exact raw chunk boundaries and event structures required by agentic CLI tools.
+Harbor never adds a paid provider by itself and never rotates between subscription accounts. Every endpoint is one you configured.
 
 ---
 
-## Quick Start
+## Quick Start: from `init` to a first Claude Code request
 
-Requires Node.js 22 or newer.
+This is the supported, tested setup (`test/handoff.test.mjs` runs these exact steps against a local fixture).
+
+**Prerequisites**
+
+- Node.js 22 or newer and Git.
+- A model server **you run** on `127.0.0.1` that implements `GET /v1/models` and the Anthropic Messages API `POST /v1/messages` with tool use and streaming. Harbor does not translate Chat Completions into Messages, so a chat-only server cannot serve Claude Code. Check your server's documentation for Anthropic-compatible `/v1/messages` support before you start.
+- Claude Code installed.
+
+**Billing:** with this setup the only cost is your local machine's compute. Harbor sends nothing to Anthropic or any hosted provider. Your Claude subscription or Anthropic API key is not used for these requests, because Claude Code authenticates to Harbor with Harbor's local token.
 
 ```sh
-# 1. Clone the repository
 git clone https://github.com/Naruto0877/nikhil-code-harbor.git
 cd nikhil-code-harbor
 
-# 2. Initialize configuration and generate a private gateway token
+# 1. Create ~/.nikhil-code-harbor/config.json and a private gateway token.
 node bin/harbor.mjs init
 
-# 3. Start the local Harbor gateway
+# 2. Add your local server to a `coding` route. Harbor checks that the model is listed.
+node bin/harbor.mjs local --base-url http://127.0.0.1:11434/v1 --model YOUR_MODEL_ID \
+  --protocols messages,chat --route coding
+
+# 3. Confirm the route: look for "claudeCode": "eligible" and "reachable": "model listed".
+node bin/harbor.mjs doctor
+
+# 4. Start Harbor (leave it running).
 node bin/harbor.mjs serve
 ```
 
-Harbor starts immediately on `http://127.0.0.1:20130`. Your private authentication token is generated at `~/.nikhil-code-harbor/gateway.token`.
-
----
-
-## Claude Code & Terminal Workflows
-
-Harbor is optimized for agentic coding tools like **Claude Code**. You can direct terminal coding sessions through Harbor to benefit from automatic gateway fallback, request telemetry, and multi-model routing:
+In another terminal, send a first request, then start Claude Code:
 
 ```sh
-# Point Claude Code to your local Harbor gateway
+TOKEN="$(cat ~/.nikhil-code-harbor/gateway.token)"
+curl -s http://127.0.0.1:20130/v1/messages \
+  -H "authorization: Bearer $TOKEN" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
+  -d '{"model":"coding","max_tokens":64,"messages":[{"role":"user","content":"Say hello"}]}'
+
 export ANTHROPIC_BASE_URL="http://127.0.0.1:20130"
-export ANTHROPIC_API_KEY="$(cat ~/.nikhil-code-harbor/gateway.token)"
-
-# Launch Claude Code using your configured route alias
-claude --model coding
+export ANTHROPIC_AUTH_TOKEN="$TOKEN"
+export ANTHROPIC_MODEL=coding ANTHROPIC_DEFAULT_HAIKU_MODEL=coding \
+       ANTHROPIC_DEFAULT_SONNET_MODEL=coding ANTHROPIC_DEFAULT_OPUS_MODEL=coding
+claude
 ```
 
-### Automated Git Diff Code Reviews
+`node bin/harbor.mjs client --route coding` prints the same settings for your configuration. Claude Code also uses the Haiku slot for background tasks, so every model variable must name a route that exists. Otherwise those calls fail with `unknown_route`.
 
-Pipe staged code directly into your Harbor route from the terminal:
-
-```sh
-git diff --cached | node bin/harbor.mjs ask \
-  --route coding \
-  --prompt "Perform a rigorous code review on these staged changes. Flag potential bugs, regressions, or security concerns." \
-  --stdin
-```
+If a step fails, `node bin/harbor.mjs status` shows the last request Harbor received and why it stopped. If Harbor has **no** record of a request, Claude Code stopped before reaching it. See [Troubleshooting](docs/CLIENTS.md#troubleshooting-rate-limits-and-failures).
 
 ---
 
-## IDE & Editor Integration
+## Diagnosing a stopped request
 
-Connect VS Code, Cursor, or Continue.dev using Harbor as an OpenAI-compatible endpoint:
-
-- **Base URL:** `http://127.0.0.1:20130/v1`
-- **API Key:** Value of `HARBOR_GATEWAY_TOKEN` (from `~/.nikhil-code-harbor/gateway.token`)
-- **Model:** Your configured alias (e.g. `coding` or `harbor-auto`)
-
-Inspect your custom setup string anytime:
 ```sh
-node bin/harbor.mjs client --route coding
+node bin/harbor.mjs status          # readable summary
+node bin/harbor.mjs status --json   # full JSON, same as GET /v1/status
 ```
+
+Each failed response carries `request_id`, `category`, `provider` and `retry_at` in its JSON error, plus `x-harbor-request-id`, `retry-after` and `x-should-retry` headers. The categories are described in [docs/CLIENTS.md](docs/CLIENTS.md#failure-categories). The browser workbench at `http://127.0.0.1:20130/` shows the same provider state, last failure and recent requests.
 
 ---
 
-## Configuring Routes & Fallback
+## Other clients
 
-Configure candidate gateways in priority order in `~/.nikhil-code-harbor/config.json`:
+- **OpenAI-compatible editors:** base URL `http://127.0.0.1:20130/v1`, API key = the Harbor token, model = a route alias.
+- **Shell:** `git diff --cached | node bin/harbor.mjs ask --route coding --prompt "Review this" --stdin` (requires a route that declares `chat`).
+
+---
+
+## Configuring routes and fallback
+
+Routes live in `~/.nikhil-code-harbor/config.json` and refer only to configured providers. For example, with the default OpenRouter free route plus your local server as a backup:
 
 ```json
 {
-  "host": "127.0.0.1",
-  "port": 20130,
   "routes": {
-    "coding": [
-      { "provider": "anthropic", "model": "claude-3-7-sonnet-20250219" },
-      { "provider": "openrouter", "model": "anthropic/claude-3.5-sonnet" },
-      { "provider": "local", "model": "qwen2.5-coder-32b" }
+    "harbor-auto": [
+      { "provider": "openrouter", "model": "openrouter/free" },
+      { "provider": "local", "model": "YOUR_MODEL_ID" }
     ]
   }
 }
 ```
 
-If the primary candidate encounters an HTTP 429 rate limit or network timeout, Harbor seamlessly attempts the next candidate in the chain before responding to the client.
+Before any output starts, Harbor falls back on connection failures, first-byte timeouts, HTTP 429 (honouring `Retry-After`, capped at 7 days), 529 and 5xx. It stops without falling back on billing or spend-cap errors, `x-should-retry: false`, and invalid requests. Attempts are bounded by `maxAttempts` and `requestDeadlineMs`. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+
+---
+
+## Crash handoff for Claude Code (opt-in)
+
+`node bin/harbor.mjs handoff install` prints Claude Code hook settings. After a crash, `node bin/harbor.mjs handoff show` lists files that were already modified before the session, files changed during it, and checks whose outcome is unknown. See [docs/HANDOFF.md](docs/HANDOFF.md).
 
 ---
 
 ## Verification & Test Suite
 
-The project includes unit, gateway, and integration test suites utilizing simulated local HTTP providers:
-
 ```sh
-# Run syntax and static module integrity checks
-npm run check
-
-# Run full automated test suite
-npm test
+npm run check   # syntax checks
+npm test        # fixtures only; no paid inference
 ```
 
-Test coverage exercises:
-- Native SSE event-stream forwarding and chunk preservation
-- Tool call deltas and function argument buffering
-- Host and Origin header enforcement (preventing DNS rebinding / CSRF)
-- Non-leaking error responses (provider tokens and internal headers are never exposed)
-- Bounded memory usage and request concurrency limits
+The suite covers fallback and cooldown, failure classification, 529 handling, stream completion and interruption, capability routing, Responses continuation ownership, cache-aware usage, compaction bounds, the handoff companion, and the init-to-first-request setup.
 
 ---
 
@@ -181,6 +173,7 @@ If you are building open-source developer tooling or researching agentic workflo
 - [Architecture & Protocol Design](docs/ARCHITECTURE.md)
 - [Client Integration Guide](docs/CLIENTS.md)
 - [Configuration Reference](docs/CONFIGURATION.md)
+- [Crash Handoff](docs/HANDOFF.md)
 - [Security & Threat Model](SECURITY.md)
 - [Contributing Guidelines](CONTRIBUTING.md)
 

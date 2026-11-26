@@ -10,7 +10,7 @@ async function api(path, options = {}) {
     ...options, redirect: "error", headers: { authorization: "Bearer " + token, "content-type": "application/json" },
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || "Request failed (HTTP " + response.status + ")");
+  if (!response.ok) throw new Error((data.error?.category ? "[" + data.error.category + "] " : "") + (data.error?.message || "Request failed (HTTP " + response.status + ")") + (data.error?.retry_at ? " Earliest retry: " + time(data.error.retry_at) + "." : "") + (data.error?.request_id ? " Request " + data.error.request_id : ""));
   return { response, data };
 }
 function row(label, text) {
@@ -21,6 +21,15 @@ function row(label, text) {
   content.textContent = text;
   item.append(heading, content);
   el("history").append(item);
+}
+function time(value) { return value ? new Date(value).toLocaleTimeString() : "unknown"; }
+function item(list, label, details) {
+  const entry = document.createElement("li");
+  const title = document.createElement("strong");
+  title.textContent = label;
+  entry.append(title);
+  for (const text of details) { const info = document.createElement("small"); info.textContent = text; entry.append(document.createElement("br"), info); }
+  el(list).append(entry);
 }
 function routeInfo() {
   const candidates = (routes[el("route").value] || []).filter(c => providers.get(c.provider)?.enabled && providers.get(c.provider).protocols.includes("chat"));
@@ -49,14 +58,26 @@ async function refresh() {
   el("activity").replaceChildren();
   for (const p of data.providers.filter(p => p.enabled)) {
     const stats = data.usage.providers[p.id];
-    const item = document.createElement("li");
-    const title = document.createElement("strong");
-    const info = document.createElement("small");
-    title.textContent = p.id;
-    const state = !p.credentialConfigured ? "key missing" : p.cooldownUntil > Date.now() ? "cooling down" : "configured";
-    info.textContent = state + " · " + (stats?.successes ?? 0) + " succeeded · " + (stats?.failures ?? 0) + " failed";
-    item.append(title, document.createElement("br"), info);
-    el("activity").append(item);
+    const state = !p.credentialConfigured ? "key missing"
+      : p.cooldown ? "cooling down (" + p.cooldown.category + ") until " + time(p.cooldown.until) + (p.cooldown.retryAfterKnown ? "" : " — no retry time from provider")
+      : "configured";
+    const counts = stats ? (stats.outcomes?.completed ?? stats.successes) + " completed · " + (stats.outcomes?.interrupted ?? 0) + " interrupted · " + stats.failures + " failed · " + (stats.fallbackSuccesses ?? 0) + " after fallback" : "no requests yet";
+    const tokens = stats ? "input " + stats.inputTokens + " · cache read " + (stats.cacheReadTokens ?? 0) + " · cache write " + (stats.cacheWriteTokens ?? 0) + " · output " + stats.outputTokens + (stats.unknownUsageRequests || stats.unknownCacheUsageRequests ? " · some usage unknown" : "") : "";
+    item("activity", p.id, [state, counts, tokens].filter(Boolean));
+  }
+  const r = data.requests;
+  const f = r.lastFailure;
+  el("lastRequest").textContent = (r.lastRequestAt ? "Received " + time(r.lastRequestAt) : "No request has reached Harbor since it started. A limit shown by your client happened before Harbor.")
+    + (f ? ". Last failure: " + (f.category || "unknown") + (f.provider ? " at " + f.provider : "") + ", " + time(f.at) + "; earliest retry " + (f.retryAt ? time(f.retryAt) : "unknown") + " (request " + f.id + ")" + (f.detail ? ". " + f.detail : "") : "");
+  el("recent").replaceChildren();
+  for (const e of r.recent.slice(0, 8)) {
+    const u = e.usage;
+    item("recent", e.outcome + (e.category ? " · " + e.category : ""), [
+      time(e.receivedAt) + " · " + (e.route || "-") + (e.provider ? " via " + e.provider : "") + (e.fallback ? " (fallback)" : ""),
+      (e.attempts || []).map(x => x.provider + ": " + (x.category ? x.category + (x.status ? " (HTTP " + x.status + ")" : "") : x.outcome || "pending")).join(" → "),
+      (e.skipped || []).map(x => "skipped " + x.provider + ": " + x.reason).join("; "),
+      u ? "in " + (u.inputTokens ?? "?") + " · cache read " + (u.cacheReadTokens ?? "?") + " · cache write " + (u.cacheWriteTokens ?? "?") + " · out " + (u.outputTokens ?? "?") : "",
+    ].filter(Boolean));
   }
   routeInfo();
   controls();

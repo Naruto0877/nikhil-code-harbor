@@ -27,16 +27,23 @@ curl http://127.0.0.1:20130/v1/messages \
 ```
 
 ### Claude Code CLI Integration
-To route terminal-based agentic tools like **Claude Code** through Nikhil Code Harbor for resilience and gateway failover:
+
+Follow the [README quick start](../README.md#quick-start-from-init-to-a-first-claude-code-request). In short:
 
 ```sh
 export ANTHROPIC_BASE_URL="http://127.0.0.1:20130"
-export ANTHROPIC_API_KEY="$HARBOR_GATEWAY_TOKEN"
-claude --model coding
+export ANTHROPIC_AUTH_TOKEN="$(cat ~/.nikhil-code-harbor/gateway.token)"   # sent as Authorization: Bearer
+export ANTHROPIC_MODEL=coding ANTHROPIC_DEFAULT_HAIKU_MODEL=coding \
+       ANTHROPIC_DEFAULT_SONNET_MODEL=coding ANTHROPIC_DEFAULT_OPUS_MODEL=coding
+claude
 ```
-*Note: Any model identifier requested by Claude Code is cleanly dispatched to the target route configured in Harbor.*
 
----
+Notes:
+
+- Claude Code requests route **aliases**. A model name that is not a route returns 400 `unknown_route`. Background tasks use the Haiku slot, so set every variable above.
+- The route needs a candidate that declares `messages`. `harbor doctor` shows `"claudeCode": "eligible"` for each such candidate, or the reason it is skipped.
+- `anthropic-version`, `anthropic-beta` (except `oauth-*`), `cache_control` and `context_management` are forwarded. `/v1/messages/count_tokens` is not implemented, and Claude Code falls back to its own estimate.
+- Billing belongs to whichever provider serves the request. With a local server that is your own compute. Harbor does not use or rotate Claude subscription accounts.
 
 ## 2. OpenAI Chat Completions (VS Code, Cursor, Continue.dev)
 
@@ -94,10 +101,11 @@ curl http://127.0.0.1:20130/v1/responses \
 
 ## 4. Status, Health & Telemetry
 
-Inspect active cooldowns, provider eligibility, and local usage tokens:
+Inspect active cooldowns, the last failure, recent requests, and per-provider input / cache-read / cache-write / output tokens:
 
 ```sh
-node bin/harbor.mjs status
+node bin/harbor.mjs status          # summary
+node bin/harbor.mjs status --json   # full GET /v1/status
 ```
 
 ### Response Headers
@@ -106,3 +114,35 @@ Every generation response forwarded by Harbor includes non-intrusive trace heade
 - `x-harbor-model`: The specific upstream model that generated the output.
 - `x-harbor-request-id`: A localized UUID for tracing request lifecycles.
 - `x-harbor-omitted-tool-chars`: Number of characters reduced if tool-compaction was active.
+- `x-harbor-fallback`: `true` when an earlier candidate failed or was cooling down. This is a common cause of prompt-cache misses.
+
+---
+
+## Troubleshooting rate limits and failures
+
+Start with `node bin/harbor.mjs status`. It shows the last time Harbor received a request, the last failure (category, provider, request ID, earliest known retry), each provider's cooldown, and recent requests.
+
+- **No request recorded** at the time of the error: Claude Code stopped before contacting Harbor. That can be a client-side limit, a local file-read size limit, or a wrong `ANTHROPIC_BASE_URL`. Harbor cannot see or fix these.
+- **A request is recorded:** use its category below. The same fields appear in the error JSON (`error.request_id`, `error.category`, `error.provider`, `error.retry_at`) and the `x-harbor-request-id`, `retry-after` and `x-should-retry` headers.
+
+### Failure categories
+
+| Category | Meaning | Recovery |
+| --- | --- | --- |
+| `harbor_concurrency_limit` | Harbor's `maxConcurrentRequests` was reached. **No upstream call was made.** | Retry shortly or raise the limit |
+| `upstream_rate_limited` | Provider HTTP 429. Harbor tried the next eligible provider. The cooldown follows `Retry-After`, capped at 7 days | Wait for `retry_at`, or add another configured provider |
+| `upstream_overloaded` | Provider HTTP 529. This is an availability problem, not a quota charge | Retry, or rely on a backup candidate |
+| `upstream_unavailable` | Connection failure, 5xx, or a response that ended before its first byte | Check the provider or local server |
+| `all_candidates_cooling` | Every eligible provider is in cooldown. No upstream call was made | Wait for `retry_at`. If it is absent, the providers gave no retry time |
+| `upstream_billing` | The provider reported a spend cap, credit, quota or billing restriction. Harbor stopped without fallback | Fix it in that provider's account |
+| `upstream_no_retry` | The provider sent `x-should-retry: false` | Do not retry automatically |
+| `upstream_rejected` | Invalid request or authentication error upstream | Check the provider key and request |
+| `no_eligible_candidate` | No candidate supports the protocol, credentials or capabilities. The message lists each skip reason | Run `harbor doctor` |
+| `first_byte_timeout` / `stream_idle_timeout` | No first byte within `firstByteTimeoutMs`, or silence after output began | Tune the timeouts. Idle streams are not replayed |
+| `stream_incomplete` / `stream_interrupted` / `stream_error_event` | The stream ended without its completion event, the connection broke, or the stream carried an error event | Retry the turn. A partial tool call is never replayed elsewhere |
+| `deadline_exceeded` | `requestDeadlineMs` elapsed. Before output, no further provider is tried. During a stream, the stream is cut off and recorded as interrupted, never replayed | Retry, or raise `requestDeadlineMs` for very long generations |
+| `attempt_limit` | `maxAttempts` was used up before output | Retry later |
+| `client_cancelled` | The client disconnected | — |
+| `unknown` | Harbor could not determine the cause | Check the provider's own logs |
+
+Outcomes are recorded as `completed`, `interrupted`, `failed`, `client_cancelled` or `rejected`. A Messages stream counts as completed only after `message_stop`, Chat after `[DONE]` or a `finish_reason`, and Responses after `response.completed` or `response.incomplete`. The forwarded bytes are never modified.

@@ -5,6 +5,10 @@ export const PROTOCOL_PATHS = Object.freeze({
   responses: "/responses",
   messages: "/messages",
 });
+// Optional per-provider feature declarations. A provider without a `capabilities`
+// list is assumed to accept every feature except provider-side response storage,
+// which must always be declared explicitly.
+export const CAPABILITIES = Object.freeze(["tools", "streaming", "thinking", "prompt_caching", "context_management", "anthropic_beta", "response_storage"]);
 const LOCAL_HOSTS = new Set(["127.0.0.1", "[::1]", "::1"]);
 export function isLoopback(host) { return LOCAL_HOSTS.has(host); }
 
@@ -34,11 +38,20 @@ export function validateConfig(input) {
   requireConfig(isLoopback(config.host), "host must be a numeric loopback address");
   config.port = boundedInteger(config.port, 20130, 0, 65535, "port");
   config.requestTimeoutMs = boundedInteger(config.requestTimeoutMs, 180000, 100, 900000, "requestTimeoutMs");
+  // Time allowed for an upstream's response headers and first body byte.
+  config.firstByteTimeoutMs = boundedInteger(config.firstByteTimeoutMs, config.requestTimeoutMs, 100, 900000, "firstByteTimeoutMs");
+  // Longest silence allowed between body chunks once a response has started.
+  config.streamIdleTimeoutMs = boundedInteger(config.streamIdleTimeoutMs, 120000, 100, 900000, "streamIdleTimeoutMs");
+  // Overall budget for the whole request: provider selection, attempts, and streaming.
+  config.requestDeadlineMs = boundedInteger(config.requestDeadlineMs, Math.max(1800000, config.firstByteTimeoutMs), 100, 3600000, "requestDeadlineMs");
+  config.maxAttempts = boundedInteger(config.maxAttempts, 3, 1, 20, "maxAttempts");
   config.catalogTtlMs = boundedInteger(config.catalogTtlMs, 300000, 100, 3600000, "catalogTtlMs");
   config.maxBodyBytes = boundedInteger(config.maxBodyBytes, 2097152, 1024, 16777216, "maxBodyBytes");
   config.maxConcurrentRequests = boundedInteger(config.maxConcurrentRequests, 4, 1, 64, "maxConcurrentRequests");
   config.toolOutputLimitChars = boundedInteger(config.toolOutputLimitChars, 0, 0, 200000, "toolOutputLimitChars");
   requireConfig(config.toolOutputLimitChars === 0 || config.toolOutputLimitChars >= 256, "toolOutputLimitChars must be zero (disabled) or at least 256");
+  config.toolOutputBudgetChars = boundedInteger(config.toolOutputBudgetChars, config.toolOutputLimitChars * 4, 0, 800000, "toolOutputBudgetChars");
+  requireConfig(config.toolOutputLimitChars === 0 ? config.toolOutputBudgetChars === 0 : config.toolOutputBudgetChars >= config.toolOutputLimitChars, "toolOutputBudgetChars must be at least toolOutputLimitChars (and zero when compaction is disabled)");
   config.allowDeclaredFreeTiers ??= false;
   requireConfig(typeof config.allowDeclaredFreeTiers === "boolean", "allowDeclaredFreeTiers must be boolean");
   requireConfig(Array.isArray(config.providers) && config.providers.length > 0, "providers must be nonempty");
@@ -65,6 +78,7 @@ export function validateConfig(input) {
     requireConfig(Array.isArray(p.protocols) && p.protocols.length > 0 && p.protocols.every(x => Object.hasOwn(PROTOCOL_PATHS, x)), `protocols for ${p.id}`);
     requireConfig(!p.apiKeyEnv || /^[A-Z][A-Z0-9_]*$/.test(p.apiKeyEnv), `API key environment variable for ${p.id}`);
     requireConfig(p.kind === "local" || Boolean(p.apiKeyEnv), `API key environment variable required for ${p.id}`);
+    requireConfig(p.capabilities === undefined || (Array.isArray(p.capabilities) && p.capabilities.every(c => CAPABILITIES.includes(c))), `capabilities for ${p.id} must be a list drawn from: ${CAPABILITIES.join(", ")}`);
     requireConfig(!p.authHeader || ["authorization", "x-api-key"].includes(p.authHeader), `authHeader for ${p.id}`);
     // Keys in config are rejected rather than accidentally committed or displayed.
     requireConfig(!Object.keys(p).some(k => /^(apiKey|token|secret|headers)$/i.test(k)), `credentials must be environment variables: ${p.id}`);

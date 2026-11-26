@@ -14,6 +14,10 @@ Operator-declared free tiers are separate and disabled by default. Their account
 
 Prompts, code, images, tool outputs, and other supplied request content are forwarded to the configured hosted provider when one is selected. Input is not automatically redacted. Fallback can forward that conversation to another explicitly configured provider. Only aggregate counters are stored locally. Provider-side policies still govern what the upstream service retains.
 
-Non-success upstream response bodies and transport error details are not exposed. Successful response bodies and event streams are forwarded as provider output, including error events embedded in a successful HTTP stream. Clients must treat all model output as untrusted and enforce their own tool-execution permissions.
+Non-success upstream response bodies and transport error details are not exposed. Harbor reads at most 64 KiB of an error body to classify it (rate limit, overload, billing). Only the category is returned or stored. The in-memory request log and `/v1/status` hold request IDs, timings, categories, provider IDs and token counts, never prompts, credentials or tool output.
+
+The opt-in crash handoff (`harbor handoff`) stores, with owner-only permissions under the state directory: a task summary you supply, the worktree path and branch, Git revisions, changed file paths with status codes and SHA-256 content hashes, and redacted test commands with their outcomes. It never stores file contents, prompts, transcripts, reasoning, or tool output. Recovery only reads the working tree.
+
+For Messages requests Harbor forwards the client's `anthropic-version` and `anthropic-beta` headers, excluding `oauth-*` values, after validating their syntax. The client's Harbor token is never forwarded. Successful response bodies and event streams are forwarded as provider output, including error events embedded in a successful HTTP stream. Clients must treat all model output as untrusted and enforce their own tool-execution permissions.
 
 The initial release has automated fixture tests and a public catalog connectivity check. It has not received an independent security audit or authenticated end-to-end model/client verification. Report a suspected vulnerability privately to the repository owner before posting credentials, exploit details, or private conversation content in a public issue.

@@ -25,31 +25,51 @@ export async function gatewayToken(stateDir, env = process.env) {
   return token;
 }
 
+const COUNTERS = ["attempts", "successes", "failures", "inputTokens", "cacheReadTokens", "cacheWriteTokens", "outputTokens", "unknownUsageRequests", "unknownCacheUsageRequests", "fallbackSuccesses"];
+const OUTCOMES = ["completed", "interrupted", "failed", "client_cancelled"];
+function emptyProvider() {
+  return { ...Object.fromEntries(COUNTERS.map(k => [k, 0])), outcomes: Object.fromEntries(OUTCOMES.map(k => [k, 0])) };
+}
+
 export class UsageStore {
   #queue = Promise.resolve();
   constructor({ file, warn = () => {} } = {}) {
     this.file = file;
     this.warn = warn;
-    this.data = { version: 1, providers: {} };
+    this.data = { version: 2, providers: {} };
   }
   async load() {
     if (!this.file) return;
     try {
       const parsed = JSON.parse(await readFile(this.file, "utf8"));
-      if (parsed.version !== 1 || !parsed.providers || typeof parsed.providers !== "object" || Array.isArray(parsed.providers)) throw new Error("Invalid usage file");
-      this.data = parsed;
+      if (![1, 2].includes(parsed.version) || !parsed.providers || typeof parsed.providers !== "object" || Array.isArray(parsed.providers)) throw new Error("Invalid usage file");
+      // Version 1 files lack cache and outcome counters; those start at zero.
+      const providers = {};
+      for (const [id, value] of Object.entries(parsed.providers)) {
+        const p = emptyProvider();
+        for (const k of COUNTERS) if (Number.isSafeInteger(value?.[k]) && value[k] >= 0) p[k] = value[k];
+        for (const k of OUTCOMES) if (Number.isSafeInteger(value?.outcomes?.[k]) && value.outcomes[k] >= 0) p.outcomes[k] = value.outcomes[k];
+        if (Number.isInteger(value?.lastStatus)) p.lastStatus = value.lastStatus;
+        if (typeof value?.lastCategory === "string") p.lastCategory = value.lastCategory;
+        Object.defineProperty(providers, id, { value: p, enumerable: true, writable: true, configurable: true });
+      }
+      this.data = { version: 2, providers };
     } catch (error) { if (error.code !== "ENOENT") throw new Error("Usage state could not be loaded; preserve and inspect the existing file"); }
   }
-  async record(provider, { success, inputTokens, outputTokens, status }) {
-    if (!Object.hasOwn(this.data.providers, provider)) Object.defineProperty(this.data.providers, provider, { value: { attempts: 0, successes: 0, failures: 0, inputTokens: 0, outputTokens: 0, unknownUsageRequests: 0 }, enumerable: true, writable: true, configurable: true });
+  // Records one upstream attempt. Missing token counts stay unknown rather than zero.
+  async record(provider, { success, status, outcome, category, fallback, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens }) {
+    if (!Object.hasOwn(this.data.providers, provider)) Object.defineProperty(this.data.providers, provider, { value: emptyProvider(), enumerable: true, writable: true, configurable: true });
     const p = this.data.providers[provider];
     p.attempts++;
     p[success ? "successes" : "failures"]++;
     const valid = x => Number.isSafeInteger(x) && x >= 0;
-    if (valid(inputTokens)) p.inputTokens += inputTokens;
-    if (valid(outputTokens)) p.outputTokens += outputTokens;
+    for (const [k, v] of [["inputTokens", inputTokens], ["cacheReadTokens", cacheReadTokens], ["cacheWriteTokens", cacheWriteTokens], ["outputTokens", outputTokens]]) if (valid(v)) p[k] += v;
     if (success && (!valid(inputTokens) || !valid(outputTokens))) p.unknownUsageRequests++;
+    if (success && (!valid(cacheReadTokens) || !valid(cacheWriteTokens))) p.unknownCacheUsageRequests++;
+    if (success && fallback) p.fallbackSuccesses++;
+    if (OUTCOMES.includes(outcome)) p.outcomes[outcome]++;
     p.lastStatus = status;
+    if (category) p.lastCategory = category; else delete p.lastCategory;
     const snapshot = JSON.stringify(this.data, null, 2) + "\n";
     this.#queue = this.#queue.then(async () => {
       if (!this.file) return;
@@ -63,28 +83,4 @@ export class UsageStore {
   snapshot() { return structuredClone(this.data); }
 }
 
-export class UsageObserver {
-  constructor() { this.pending = ""; this.decoder = new TextDecoder(); this.values = {}; this.failed = false; }
-  observe(payload) {
-    if (payload?.error || payload?.type === "error" || payload?.type === "response.failed" || payload?.response?.error) this.failed = true;
-    const usage = payload?.usage ?? payload?.message?.usage ?? payload?.response?.usage;
-    if (!usage) return;
-    for (const [target, value] of [["inputTokens", usage.input_tokens ?? usage.prompt_tokens], ["outputTokens", usage.output_tokens ?? usage.completion_tokens]]) {
-      if (Number.isSafeInteger(value) && value >= 0) this.values[target] = Math.max(this.values[target] ?? 0, value);
-    }
-  }
-  push(chunk) {
-    this.pending += this.decoder.decode(chunk, { stream: true });
-    let newline;
-    while ((newline = this.pending.indexOf("\n")) >= 0) {
-      const line = this.pending.slice(0, newline).replace(/\r$/, "");
-      this.pending = this.pending.slice(newline + 1);
-      if (line.startsWith("data:")) {
-        try { this.observe(JSON.parse(line.slice(5).trim())); } catch { /* SSE comments / [DONE] */ }
-      }
-    }
-    // This observer never modifies forwarded bytes; oversized events simply have unknown usage.
-    if (this.pending.length > 262144) this.pending = "";
-  }
-  result() { return { ...this.values }; }
-}
+export { StreamObserver as UsageObserver } from "./observe.mjs";
